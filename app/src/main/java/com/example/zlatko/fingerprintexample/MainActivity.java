@@ -52,8 +52,8 @@ public class MainActivity extends AppCompatActivity {
   public static final String ANDROID_KEY_STORE = "AndroidKeyStore";
   private KeyguardManager keyguardManager;
 
-  private EditText username;
-  private EditText password;
+  private EditText usernameEditText;
+  private EditText passwordEditText;
   private CheckBox saveCredentials;
   private Button loginWithFingerprint;
 
@@ -63,8 +63,8 @@ public class MainActivity extends AppCompatActivity {
       if (saveCredentials.isChecked()) {
         saveCredentialsAndLogin();
       } else {
-        String usernameString = username.getText().toString();
-        String passwordString = password.getText().toString();
+        String usernameString = usernameEditText.getText().toString();
+        String passwordString = passwordEditText.getText().toString();
         simulateLogin(usernameString, passwordString);
       }
     }
@@ -92,8 +92,8 @@ public class MainActivity extends AppCompatActivity {
     setContentView(R.layout.activity_main);
     keyguardManager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
 
-    username = (EditText) findViewById(R.id.username);
-    password = (EditText) findViewById(R.id.password);
+    usernameEditText = (EditText) findViewById(R.id.username);
+    passwordEditText = (EditText) findViewById(R.id.password);
     saveCredentials = (CheckBox) findViewById(R.id.saveCredentials);
     loginWithFingerprint = (Button) findViewById(R.id.loginWithFingerprint);
 
@@ -117,7 +117,7 @@ public class MainActivity extends AppCompatActivity {
   private void saveCredentialsAndLogin() {
     try {
       // encrypt the password
-      String passwordString = password.getText().toString();
+      String passwordString = passwordEditText.getText().toString();
       SecretKey secretKey = createKey();
       Cipher cipher = Cipher.getInstance(TRANSFORMATION);
       cipher.init(Cipher.ENCRYPT_MODE, secretKey);
@@ -128,7 +128,7 @@ public class MainActivity extends AppCompatActivity {
 
       // store the login data in the shared preferences
       // only the password is encrypted, IV used for the encryption is stored
-      String usernameString = username.getText().toString();
+      String usernameString = usernameEditText.getText().toString();
       SharedPreferences.Editor editor = getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE).edit();
       editor.putString("username", usernameString);
       editor.putString("password", encryptedPassword);
