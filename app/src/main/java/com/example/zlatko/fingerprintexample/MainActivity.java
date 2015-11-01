@@ -50,17 +50,23 @@ public class MainActivity extends AppCompatActivity {
           + KeyProperties.ENCRYPTION_PADDING_PKCS7;
   public static final String CHARSET_NAME = "UTF-8";
   public static final String STORAGE_FILE_NAME = "credentials";
+  public static final String ANDROID_KEY_STORE = "AndroidKeyStore";
   private KeyguardManager keyguardManager;
 
   private EditText username;
   private EditText password;
   private CheckBox saveCredentials;
-  byte[] iv;
 
   private View.OnClickListener loginOncLickListener = new View.OnClickListener() {
     @Override
     public void onClick(View v) {
-      login();
+      if (saveCredentials.isChecked()) {
+        saveCredentialsAndLogin();
+      } else {
+        String usernameString = username.getText().toString();
+        String passwordString = password.getText().toString();
+        simulateLogin(usernameString, passwordString);
+      }
     }
   };
 
@@ -74,7 +80,7 @@ public class MainActivity extends AppCompatActivity {
   private View.OnClickListener clearDataOncLickListener = new View.OnClickListener() {
     @Override
     public void onClick(View v) {
-      clearData();
+      getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE).edit().clear().apply();
     }
   };
 
@@ -83,7 +89,7 @@ public class MainActivity extends AppCompatActivity {
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_main);
-    keyguardManager =  (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+    keyguardManager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
 
     username = (EditText) findViewById(R.id.username);
     password = (EditText) findViewById(R.id.password);
@@ -92,6 +98,87 @@ public class MainActivity extends AppCompatActivity {
     findViewById(R.id.login).setOnClickListener(loginOncLickListener);
     findViewById(R.id.loginWithFingerprint).setOnClickListener(loginWithFingerPrintOncLickListener);
     findViewById(R.id.clearData).setOnClickListener(clearDataOncLickListener);
+  }
+
+  private void saveCredentialsAndLogin() {
+    try {
+      String usernameString = username.getText().toString();
+      String passwordString = password.getText().toString();
+      SecretKey secretKey = createKey();
+      Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+      cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+      byte[] iv = cipher.getIV();
+      String encryptedPassword = Base64.encodeToString(cipher.doFinal(passwordString.getBytes(CHARSET_NAME)), Base64.DEFAULT);
+
+      SharedPreferences.Editor editor = getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE).edit();
+      editor.putString("username", usernameString);
+      editor.putString("password", encryptedPassword);
+      editor.putString("encryptionIV", Base64.encodeToString(iv, Base64.DEFAULT));
+      editor.apply();
+
+      simulateLogin(usernameString, passwordString);
+    } catch (UserNotAuthenticatedException e) {
+      showAuthenticationScreen(SAVE_CREDENTAILS_REQUEST_CODE);
+    } catch (NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | InvalidKeyException
+            | BadPaddingException | UnsupportedEncodingException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  public void loginWithFingerprint() {
+    try {
+      SharedPreferences sharedPreferences = getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE);
+      String username = sharedPreferences.getString("username", null);
+      String base64EncryptedPassword = sharedPreferences.getString("password", null);
+      String base64EncryptionIv = sharedPreferences.getString("encryptionIV", null);
+      byte[] encryptionIv = Base64.decode(base64EncryptionIv, Base64.DEFAULT);
+      byte[] encryptedPassword = Base64.decode(base64EncryptedPassword, Base64.DEFAULT);
+
+      KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
+      keyStore.load(null);
+      SecretKey secretKey = (SecretKey) keyStore.getKey(KEY_NAME, null);
+      Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+      cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(encryptionIv));
+      byte[] passwordBytes = cipher.doFinal(encryptedPassword);
+      String password = new String(passwordBytes, CHARSET_NAME);
+
+      simulateLogin(username, password);
+    } catch (UserNotAuthenticatedException e) {
+      showAuthenticationScreen(LOGIN_WITH_CREDENTAILS_REQUEST_CODE);
+    } catch (NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | InvalidKeyException
+            | BadPaddingException | InvalidAlgorithmParameterException
+            | UnrecoverableKeyException | KeyStoreException | CertificateException | IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  private void simulateLogin(String usernameString, String passwordString) {
+    String message = String.format("Simulating login with username [%s] and password [%s]", usernameString, passwordString);
+    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+  }
+
+  private SecretKey createKey() {
+    try {
+      KeyGenerator keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEY_STORE);
+      keyGenerator.init(new KeyGenParameterSpec.Builder(KEY_NAME,
+              KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+              .setBlockModes(KeyProperties.BLOCK_MODE_CBC)
+              .setUserAuthenticationRequired(true)
+                      // Require that the user has unlocked in the last 30 seconds
+              .setUserAuthenticationValidityDurationSeconds(AUTHENTICATION_DURATION_SECONDS)
+              .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_PKCS7)
+              .build());
+      return keyGenerator.generateKey();
+    } catch (NoSuchAlgorithmException | NoSuchProviderException | InvalidAlgorithmParameterException e) {
+      throw new RuntimeException("Failed to create a symmetric key", e);
+    }
+  }
+
+  private void showAuthenticationScreen(int requestCode) {
+    Intent intent = keyguardManager.createConfirmDeviceCredentialIntent(null, null);
+    if (intent != null) {
+      startActivityForResult(intent, requestCode);
+    }
   }
 
   @Override
@@ -104,125 +191,6 @@ public class MainActivity extends AppCompatActivity {
       }
     } else {
       Toast.makeText(this, "Confirming credentials failed", Toast.LENGTH_SHORT).show();
-    }
-  }
-
-  public void login() {
-    if (saveCredentials.isChecked()) {
-      saveCredentialsAndLogin();
-    } else {
-    String usernameString = username.getText().toString();
-    String passwordString = password.getText().toString();
-    simulateLogin(usernameString, passwordString);
-    }
-
-  }
-
-  public void loginWithFingerprint() {
-    if (keyguardManager.isKeyguardLocked()) {
-      showAuthenticationScreen(LOGIN_WITH_CREDENTAILS_REQUEST_CODE);
-      return;
-    }
-
-    SharedPreferences sharedPreferences = getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE);
-    String usernameString = sharedPreferences.getString("username", null);
-    String encryptedPasswordString = sharedPreferences.getString("password", null);
-    String encryptionIV = sharedPreferences.getString("encryptionIV", null);
-    String passwordString = decrypt(encryptedPasswordString, Base64.decode(encryptionIV, Base64.DEFAULT));
-    simulateLogin(usernameString, passwordString);
-  }
-
-  public void clearData() {
-    getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE).edit().clear().apply();
-  }
-
-  private void saveCredentialsAndLogin() {
-    String usernameString = username.getText().toString();
-    String passwordString = password.getText().toString();
-    String encryptedPassword = encrypt(passwordString);
-    if (encryptedPassword == null) {
-      return;
-    }
-    SharedPreferences.Editor editor = getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE).edit();
-    editor.putString("username", usernameString);
-    editor.putString("password", encryptedPassword);
-    editor.putString("encryptionIV", Base64.encodeToString(iv, Base64.DEFAULT));
-    editor.apply();
-    simulateLogin(usernameString, passwordString);
-  }
-
-  private String encrypt(String password) {
-    String encryptedPassword = null;
-    try {
-      SecretKey secretKey = createKey();
-      Cipher cipher = Cipher.getInstance(TRANSFORMATION);
-      cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-      iv = cipher.getIV();
-      encryptedPassword = Base64.encodeToString(cipher.doFinal(password.getBytes(CHARSET_NAME)), Base64.DEFAULT);
-    } catch (UserNotAuthenticatedException e) {
-      showAuthenticationScreen(SAVE_CREDENTAILS_REQUEST_CODE);
-    } catch (NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | InvalidKeyException
-            | BadPaddingException | UnsupportedEncodingException e) {
-      throw new RuntimeException(e);
-    }
-    return encryptedPassword;
-  }
-
-  private String decrypt(String encryptedPassword, byte[] encryptionIV) {
-    String password = null;
-    try {
-      KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
-      keyStore.load(null);
-      SecretKey secretKey = (SecretKey) keyStore.getKey(KEY_NAME, null);
-      Cipher cipher = Cipher.getInstance(TRANSFORMATION);
-      cipher.init(Cipher.DECRYPT_MODE, secretKey, new IvParameterSpec(encryptionIV));
-      password = new String(cipher.doFinal(Base64.decode(encryptedPassword, Base64.DEFAULT)), CHARSET_NAME);
-    } catch (UserNotAuthenticatedException e) {
-      showAuthenticationScreen(LOGIN_WITH_CREDENTAILS_REQUEST_CODE);
-    } catch (NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | InvalidKeyException
-            | BadPaddingException | InvalidAlgorithmParameterException
-            | UnrecoverableKeyException | KeyStoreException | CertificateException | IOException e) {
-      throw new RuntimeException(e);
-    }
-    return password;
-  }
-
-  private void simulateLogin(String usernameString, String passwordString) {
-    String message = String.format("Simulating login with username [%s] and password [%s]", usernameString, passwordString);
-    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-  }
-
-  @TargetApi(Build.VERSION_CODES.M)
-  private SecretKey createKey() {
-    // Generate a key to decrypt payment credentials, tokens, etc.
-    // This will most likely be a registration step for the user when they are setting up your app.
-    try {
-      KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
-      keyStore.load(null);
-      KeyGenerator keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
-
-      // Set the alias of the entry in Android KeyStore where the key will appear
-      // and the constrains (purposes) in the constructor of the Builder
-      keyGenerator.init(new KeyGenParameterSpec.Builder(KEY_NAME,
-              KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
-              .setBlockModes(KeyProperties.BLOCK_MODE_CBC)
-              .setUserAuthenticationRequired(true)
-                      // Require that the user has unlocked in the last 30 seconds
-              .setUserAuthenticationValidityDurationSeconds(AUTHENTICATION_DURATION_SECONDS)
-              .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_PKCS7)
-              .build());
-      return keyGenerator.generateKey();
-    } catch (NoSuchAlgorithmException | NoSuchProviderException | InvalidAlgorithmParameterException | KeyStoreException
-            | CertificateException | IOException e) {
-      throw new RuntimeException("Failed to create a symmetric key", e);
-    }
-  }
-
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
-  private void showAuthenticationScreen(int requestCode) {
-    Intent intent = keyguardManager.createConfirmDeviceCredentialIntent(null, null);
-    if (intent != null) {
-      startActivityForResult(intent, requestCode);
     }
   }
 
