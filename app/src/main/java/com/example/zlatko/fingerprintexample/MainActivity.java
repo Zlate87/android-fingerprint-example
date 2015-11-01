@@ -1,12 +1,10 @@
 package com.example.zlatko.fingerprintexample;
 
-import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.KeyguardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.os.Build;
 import android.os.Bundle;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
@@ -14,6 +12,7 @@ import android.security.keystore.UserNotAuthenticatedException;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Base64;
 import android.view.View;
+import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.Toast;
@@ -39,8 +38,8 @@ import javax.crypto.spec.IvParameterSpec;
 
 public class MainActivity extends AppCompatActivity {
 
-  public static final int SAVE_CREDENTAILS_REQUEST_CODE = 1;
-  private static final int LOGIN_WITH_CREDENTAILS_REQUEST_CODE = 2;
+  public static final int SAVE_CREDENTIALS_REQUEST_CODE = 1;
+  private static final int LOGIN_WITH_CREDENTIALS_REQUEST_CODE = 2;
 
   public static final int AUTHENTICATION_DURATION_SECONDS = 30;
 
@@ -56,6 +55,7 @@ public class MainActivity extends AppCompatActivity {
   private EditText username;
   private EditText password;
   private CheckBox saveCredentials;
+  private Button loginWithFingerprint;
 
   private View.OnClickListener loginOncLickListener = new View.OnClickListener() {
     @Override
@@ -81,6 +81,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onClick(View v) {
       getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE).edit().clear().apply();
+      Toast.makeText(MainActivity.this, "Credentials removed", Toast.LENGTH_SHORT).show();
     }
   };
 
@@ -94,31 +95,49 @@ public class MainActivity extends AppCompatActivity {
     username = (EditText) findViewById(R.id.username);
     password = (EditText) findViewById(R.id.password);
     saveCredentials = (CheckBox) findViewById(R.id.saveCredentials);
+    loginWithFingerprint = (Button) findViewById(R.id.loginWithFingerprint);
 
     findViewById(R.id.login).setOnClickListener(loginOncLickListener);
-    findViewById(R.id.loginWithFingerprint).setOnClickListener(loginWithFingerPrintOncLickListener);
+    loginWithFingerprint.setOnClickListener(loginWithFingerPrintOncLickListener);
     findViewById(R.id.clearData).setOnClickListener(clearDataOncLickListener);
+  }
+
+  @Override
+  protected void onResume() {
+    super.onResume();
+    if (!keyguardManager.isKeyguardSecure()) {
+      Toast.makeText(this,
+              "Secure lock screen hasn't set up. Go to 'Settings -> Security -> Screenlock' to set up a lock screen",
+              Toast.LENGTH_LONG).show();
+    }
+    saveCredentials.setEnabled(keyguardManager.isKeyguardSecure());
+    loginWithFingerprint.setEnabled(keyguardManager.isKeyguardSecure());
   }
 
   private void saveCredentialsAndLogin() {
     try {
-      String usernameString = username.getText().toString();
+      // encrypt the password
       String passwordString = password.getText().toString();
       SecretKey secretKey = createKey();
       Cipher cipher = Cipher.getInstance(TRANSFORMATION);
       cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-      byte[] iv = cipher.getIV();
-      String encryptedPassword = Base64.encodeToString(cipher.doFinal(passwordString.getBytes(CHARSET_NAME)), Base64.DEFAULT);
+      byte[] encryptionIv = cipher.getIV();
+      byte[] passwordBytes = passwordString.getBytes(CHARSET_NAME);
+      byte[] encryptedPasswordBytes = cipher.doFinal(passwordBytes);
+      String encryptedPassword = Base64.encodeToString(encryptedPasswordBytes, Base64.DEFAULT);
 
+      // store the login data in the shared preferences
+      // only the password is encrypted, IV used for the encryption is stored
+      String usernameString = username.getText().toString();
       SharedPreferences.Editor editor = getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE).edit();
       editor.putString("username", usernameString);
       editor.putString("password", encryptedPassword);
-      editor.putString("encryptionIV", Base64.encodeToString(iv, Base64.DEFAULT));
+      editor.putString("encryptionIv", Base64.encodeToString(encryptionIv, Base64.DEFAULT));
       editor.apply();
 
       simulateLogin(usernameString, passwordString);
     } catch (UserNotAuthenticatedException e) {
-      showAuthenticationScreen(SAVE_CREDENTAILS_REQUEST_CODE);
+      showAuthenticationScreen(SAVE_CREDENTIALS_REQUEST_CODE);
     } catch (NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | InvalidKeyException
             | BadPaddingException | UnsupportedEncodingException e) {
       throw new RuntimeException(e);
@@ -127,13 +146,20 @@ public class MainActivity extends AppCompatActivity {
 
   public void loginWithFingerprint() {
     try {
+      // load login data from shared preferences (
+      // only the password is encrypted, IV used for the encryption is loaded from shared preferences
       SharedPreferences sharedPreferences = getSharedPreferences(STORAGE_FILE_NAME, Activity.MODE_PRIVATE);
       String username = sharedPreferences.getString("username", null);
+      if (username == null) {
+        Toast.makeText(MainActivity.this, "You must first store credentials.", Toast.LENGTH_SHORT).show();
+        return;
+      }
       String base64EncryptedPassword = sharedPreferences.getString("password", null);
-      String base64EncryptionIv = sharedPreferences.getString("encryptionIV", null);
+      String base64EncryptionIv = sharedPreferences.getString("encryptionIv", null);
       byte[] encryptionIv = Base64.decode(base64EncryptionIv, Base64.DEFAULT);
       byte[] encryptedPassword = Base64.decode(base64EncryptedPassword, Base64.DEFAULT);
 
+      // decrypt the password
       KeyStore keyStore = KeyStore.getInstance(ANDROID_KEY_STORE);
       keyStore.load(null);
       SecretKey secretKey = (SecretKey) keyStore.getKey(KEY_NAME, null);
@@ -142,9 +168,10 @@ public class MainActivity extends AppCompatActivity {
       byte[] passwordBytes = cipher.doFinal(encryptedPassword);
       String password = new String(passwordBytes, CHARSET_NAME);
 
+      // use the login data
       simulateLogin(username, password);
     } catch (UserNotAuthenticatedException e) {
-      showAuthenticationScreen(LOGIN_WITH_CREDENTAILS_REQUEST_CODE);
+      showAuthenticationScreen(LOGIN_WITH_CREDENTIALS_REQUEST_CODE);
     } catch (NoSuchAlgorithmException | NoSuchPaddingException | IllegalBlockSizeException | InvalidKeyException
             | BadPaddingException | InvalidAlgorithmParameterException
             | UnrecoverableKeyException | KeyStoreException | CertificateException | IOException e) {
@@ -164,7 +191,6 @@ public class MainActivity extends AppCompatActivity {
               KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
               .setBlockModes(KeyProperties.BLOCK_MODE_CBC)
               .setUserAuthenticationRequired(true)
-                      // Require that the user has unlocked in the last 30 seconds
               .setUserAuthenticationValidityDurationSeconds(AUTHENTICATION_DURATION_SECONDS)
               .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_PKCS7)
               .build());
@@ -184,9 +210,9 @@ public class MainActivity extends AppCompatActivity {
   @Override
   protected void onActivityResult(int requestCode, int resultCode, Intent data) {
     if (resultCode == Activity.RESULT_OK) {
-      if (requestCode == SAVE_CREDENTAILS_REQUEST_CODE) {
+      if (requestCode == SAVE_CREDENTIALS_REQUEST_CODE) {
         saveCredentialsAndLogin();
-      } else if (requestCode == LOGIN_WITH_CREDENTAILS_REQUEST_CODE) {
+      } else if (requestCode == LOGIN_WITH_CREDENTIALS_REQUEST_CODE) {
         loginWithFingerprint();
       }
     } else {
