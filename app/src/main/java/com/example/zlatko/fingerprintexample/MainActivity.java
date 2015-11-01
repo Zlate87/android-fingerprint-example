@@ -181,7 +181,7 @@ public class MainActivity extends AppCompatActivity {
 
   private void simulateLogin(String usernameString, String passwordString) {
     String message = String.format("Simulating login with username [%s] and password [%s]", usernameString, passwordString);
-    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+    Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
   }
 
   private SecretKey createKey() {
